@@ -1,0 +1,151 @@
+name: Validate & Sanitize Vehicle Tracking Requests (Security & GDPR)
+
+on:
+  push:
+    paths:
+      - 'requests.json'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  sanitize-requests:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout ev2001 repository
+        uses: actions/checkout@v4
+
+      - name: Validate and Sanitize requests.json for Security & GDPR
+        run: |
+          python3 - << 'EOF'
+          import json, os, re, hashlib, sys
+          from datetime import date
+
+          PATH = "requests.json"
+          if not os.path.exists(PATH):
+              print("No requests.json present; nothing to validate.")
+              sys.exit(0)
+
+          if os.path.getsize(PATH) > 65536:
+              raise ValueError("requests.json exceeds 64KB security limit.")
+
+          with open(PATH, "r", encoding="utf-8") as f:
+              raw_data = json.load(f)
+
+          items = raw_data.get("requests", []) if isinstance(raw_data, dict) else (raw_data if isinstance(raw_data, list) else [])
+
+          VALID_CONDITIONS = {"ALL", "NEW", "NEARLY_NEW", "USED"}
+          VALID_FUELS = {"ALL", "Electric", "Plug-in Hybrid", "Hybrid", "Petrol", "Diesel"}
+          FORBIDDEN_RE = re.compile(r"(@|https?://|www\.|<|>|javascript:|data:|;|--|/\*|\*/|\\)", re.IGNORECASE)
+
+          def parse_int(val, lo, hi, default):
+              if val is None or val == "" or str(val).upper() == "ANY":
+                  return default
+              try:
+                  return max(lo, min(hi, int(float(str(val).replace(",", "").strip()))))
+              except Exception:
+                  return default
+
+          sanitized = []
+          seen_hashes = set()
+
+          for idx, item in enumerate(items[:50], 1):
+              if not isinstance(item, dict):
+                  continue
+              make = re.sub(r"\s+", " ", str(item.get("make") or "").strip().upper())
+              model = re.sub(r"\s+", " ", str(item.get("model") or "").strip().upper())
+              if not make or not model:
+                  continue
+              if FORBIDDEN_RE.search(make) or FORBIDDEN_RE.search(model):
+                  continue
+              if not re.match(r"^[A-Z0-9\-\.\s/+:#]{1,35}$", make) or not re.match(r"^[A-Z0-9\-\.\s/+:#]{1,40}$", model):
+                  continue
+
+              alias_map = {"VW": "VOLKSWAGEN", "MERCEDES": "MERCEDES-BENZ", "ŠKODA": "SKODA", "CITROËN": "CITROEN"}
+              make = alias_map.get(make, make)
+
+              fuel_raw = str(item.get("fuel_type") or "ALL").strip()
+              fuel_lookup = {f.upper(): f for f in VALID_FUELS}
+              fuel_lookup["EV"] = "Electric"
+              fuel_lookup["PHEV"] = "Plug-in Hybrid"
+              fuel_type = fuel_lookup.get(fuel_raw.upper(), "ALL")
+
+              seats_raw = item.get("seats")
+              seats = 0
+              if seats_raw not in (None, "", "ALL", "ANY", 0, "0"):
+                  try:
+                      sv = int(seats_raw)
+                      if 2 <= sv <= 9:
+                          seats = sv
+                  except Exception:
+                      seats = 0
+
+              condition = str(item.get("condition") or "ALL").strip().upper()
+              if condition not in VALID_CONDITIONS:
+                  condition = "ALL"
+
+              m_min = parse_int(item.get("mileage_min"), 0, 500000, 0) or 0
+              m_max = parse_int(item.get("mileage_max"), 0, 500000, None)
+              if m_max is not None and m_min > m_max:
+                  m_min, m_max = m_max, m_min
+
+              a_min = parse_int(item.get("age_min"), 0, 50, 0) or 0
+              a_max = parse_int(item.get("age_max"), 0, 50, None)
+              if a_max is not None and a_min > a_max:
+                  a_min, a_max = a_max, a_min
+
+              c_date = str(item.get("created_date") or "").strip()
+              if not re.match(r"^\d{4}-\d{2}-\d{2}$", c_date):
+                  c_date = date.today().isoformat()
+
+              canonical = json.dumps({
+                  "make": make, "model": model, "fuel_type": fuel_type, "seats": seats,
+                  "condition": condition, "mileage_min": m_min, "mileage_max": m_max,
+                  "age_min": a_min, "age_max": a_max
+              }, sort_keys=True)
+              r_hash = hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
+              if r_hash in seen_hashes:
+                  continue
+              seen_hashes.add(r_hash)
+
+              alert_id = parse_int(item.get("alert_id"), 1, 9999, len(sanitized) + 1)
+              status = "active" if item.get("status") == "active" else "pending"
+
+              sanitized.append({
+                  "alert_id": alert_id,
+                  "request_hash": r_hash,
+                  "make": make,
+                  "model": model,
+                  "fuel_type": fuel_type,
+                  "seats": seats,
+                  "condition": condition,
+                  "mileage_min": m_min,
+                  "mileage_max": m_max,
+                  "age_min": a_min,
+                  "age_max": a_max,
+                  "created_date": c_date,
+                  "status": status
+              })
+
+          clean_payload = {
+              "schema_version": 1,
+              "gdpr_notice": "Strictly vehicle constraint parameters only. Do not include personal data.",
+              "requests": sanitized
+          }
+
+          with open(PATH, "w", encoding="utf-8") as f:
+              json.dump(clean_payload, f, indent=2)
+          print(f"Sanitized {len(sanitized)} valid request(s).")
+          EOF
+
+      - name: Commit sanitized requests.json if changed
+        run: |
+          if ! git diff --quiet requests.json; then
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add requests.json
+            git commit -m "chore: sanitize requests.json (security & GDPR check)"
+            git push
+          fi
+
