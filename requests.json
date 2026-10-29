@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "gdpr_notice": "Strictly vehicle constraint parameters only. Do not include personal data.",
+  "requests": [
+    {
+      "alert_id": 1,
+      "request_hash": "1bd4536881799679",
+      "label": "Alert #1: Mazda RX-7",
+      "make": "MAZDA",
+      "model": "RX-7",
+      "fuel_type": "ALL",
+      "seats": 0,
+      "condition": "ALL",
+      "mileage_min": 0,
+      "mileage_max": null,
+      "age_min": 0,
+      "age_max": null,
+      "created_date": "2026-10-18",
+      "status": "active"
+    },
+    {
+      "alert_id": 2,
+      "request_hash": "2cb3569b86d9cf0d",
+      "label": "Alert #2: Peugeot E-5008 | Electric | Nearly New | 7-Seat",
+      "make": "PEUGEOT",
+      "model": "E-5008",
+      "fuel_type": "Electric",
+      "seats": 7,
+      "condition": "NEARLY_NEW",
+      "mileage_min": 0,
+      "mileage_max": null,
+      "age_min": 0,
+      "age_max": null,
+      "created_date": "2026-10-19",
+      "status": "active"
+    }
+  ]
+}
